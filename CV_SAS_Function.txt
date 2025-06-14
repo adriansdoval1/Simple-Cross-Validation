@@ -1,0 +1,167 @@
+/*Código que crea un análisis de Cross Validation (K-Folded)*/
+/*Archivo modificado por:*/
+/*05/Marzo/2021: Adrián Sandoval creó la primera versión del código*/
+/*Versión 1.- La validación sólo mide la diferencia porcentual entre el valor esperado y valor actual para regresión Gamma mediante el método de "Cross validation",*/
+/*            que es de la siguiente forma:*/
+/*1.- La tabla se divide en K pedazos de mismo tamaño*/
+/*2.- Por cada fragmento K de la tabla, se entrena el modelo con los K-1 */
+/*3.- El paso 2 se repite K veces*/
+/*4.- Se calcula la diferencia porcentual promedio*/
+/*La diferencia porcentual se calculó de la siguiente forma*/
+/*Deviance = (Actual/ Esperado) - 1*/
+
+%MACRO Cross_Validation_v1(Model_Data,Var_Dep,Var_Indep,K,Class_Factor,Offset_var,Weight,DIST,LINK);
+	/*Estas macros ayudan a crear variables que van a ayudar a saber el nivel de análisis*/
+	/*Por ejemplo, la variable Class_Factor_Aux resulta en el vector de variables categóricas que serán usadas si el usuario las accesa*/
+	%LET Class_Factor_Aux=%SYSFUNC(IFC(%SYSEVALF(%SUPERQ(Class_Factor)=,boolean),,CLASS &Class_Factor.));
+	%LET Offset_Aux=%SYSFUNC(IFC(%SYSEVALF(%SUPERQ(Offset_var)=,boolean),,OFFSET= &Offset_var.));
+	%LET Weight_aux=%SYSFUNC(IFC(%SYSEVALF(%SUPERQ(weight)=,boolean),,WEIGHT &Weight.));
+	%LET Level1_Aux=%SYSFUNC(IFC(%SYSEVALF(%SUPERQ(Class_Factor)=,boolean),,Level1));
+
+	%LET Inicio = %SYSFUNC(DATETIME());
+
+	%IF %SYSFUNC(EXIST(WORK.FINAL)) %THEN
+	%DO;
+		PROC DELETE DATA=work.FINAL;
+		RUN;
+	%END;
+
+	%IF %SYSFUNC(EXIST(WORK.Data_K_Folded)) %THEN
+	%DO;
+		PROC DELETE DATA=work.Data_K_Folded;
+		RUN;
+	%END;
+
+	%IF %SYSFUNC(EXIST(WORK.Cross_Validation)) %THEN
+	%DO;
+		PROC DELETE DATA=work.Cross_Validation;
+		RUN;
+	%END;
+
+	%IF %SYSFUNC(EXIST(WORK.Cross_Validation_final)) %THEN
+	%DO;
+		PROC DELETE DATA=work.Cross_Validation_final;
+		RUN;
+	%END;
+	
+	%IF %SYSFUNC(EXIST(WORK.FINAL_PARAM)) %THEN
+	%DO;
+		PROC DELETE DATA=work.FINAL_PARAM;
+		RUN;
+	%END;
+	
+	PROC SURVEYSELECT DATA=&Model_Data. GROUP=&K. OUT=WORK.Data_K_Folded; 
+    RUN;
+	
+	%DO i=1 %TO &K.;
+
+		PROC GENMOD DATA=Data_K_Folded (WHERE = (GroupID NE &i.));
+		&Class_Factor_Aux.;
+		MODEL &Var_Dep. = &Var_Indep. /DIST=&DIST. LINK=&LINK. &Offset_Aux.;
+		      &Weight_aux.;
+		STORE WORK.Model_Fold_&i.;
+		ODS OUTPUT ParameterEstimates=WORK.Param_Fold_&i.;
+		OUTPUT OUT=WORK.Residuales_fold_&i.
+		PRED=Predicted;
+		RUN;
+		
+		PROC PLM SOURCE=Model_Fold_&i.;
+		SCORE DATA = WORK.Data_K_Folded (WHERE = (GroupID = &i.)) OUT=Fold_&i._Results /ILINK;
+		RUN;
+
+		
+		PROC SUMMARY DATA=Fold_&i._Results NWAY MISSING;
+		VAR &Var_Dep. Predicted;
+		OUTPUT OUT=Cross_Validation_&i. (DROP=_:) SUM=;
+		RUN;
+
+		
+		PROC APPEND BASE=FINAL
+                    DATA=Cross_Validation_&i.;
+		RUN;
+
+		DATA WORK.Param_Fold_&i.;
+		SET WORK.Param_Fold_&i.;
+			Fold_Iteration=&i.;
+		RUN;
+
+		PROC APPEND BASE=FINAL_Param
+                    DATA=WORK.Param_Fold_&i.;
+		RUN;
+
+		PROC DELETE DATA=WORK.Param_Fold_&i.
+                         WORK.Cross_Validation_&i.
+                         WORK.FOLD_&i._RESULTS
+                         WORK.Residuales_fold_&i.;
+		RUN;
+		
+	%END;
+
+
+	DATA WORK.Cross_Validation;
+	SET WORK.FINAL;
+		Abs_Deviance=ABS((&Var_Dep./Predicted)-1);
+	RUN;
+
+	
+	PROC MEANS DATA=WORK.Cross_validation NWAY NOPRINT MISSING;
+	VAR Abs_Deviance;
+	OUTPUT OUT=Cross_Validation_final (DROP=_:) MEAN(Abs_Deviance)=CV_Abs_Deviance
+                                            	STD(Abs_Deviance)=CV_Abs_Deviance_std;
+	RUN;
+
+	PROC DELETE DATA=Data_K_Folded
+                     FINAL;
+	RUN;
+
+	DATA _NULL_;
+	DUR = DATETIME()-&Inicio.;
+	PUT 30*'-' / ' DURACIÓN:' DUR TIME13.2 / 30*'-';
+	RUN;
+
+%MEND Cross_Validation_v1;
+
+%LET _CLIENTTASKLABEL=;
+%LET _CLIENTPROCESSFLOWNAME=;
+%LET _CLIENTPROJECTPATH=;
+%LET _CLIENTPROJECTPATHHOST=;
+%LET _CLIENTPROJECTNAME=;
+%LET _SASPROGRAMFILE=;
+%LET _SASPROGRAMFILEHOST=;
+
+
+
+%LET Class_Factor=Species;
+%LET Var_Indep=SepalWidth PetalLength PetalWidth;
+%Cross_Validation_v1(Model_Data=SASHELP.IRIS,Var_Dep=SepalLength,Var_Indep=&Var_Indep.,K=10,Class_Factor=&Class_Factor.,DIST=NORMAL,LINK=IDENTITY)
+
+
+
+
+
+
+
+
+
+
+%LET _CLIENTTASKLABEL=;
+%LET _CLIENTPROCESSFLOWNAME=;
+%LET _CLIENTPROJECTPATH=;
+%LET _CLIENTPROJECTPATHHOST=;
+%LET _CLIENTPROJECTNAME=;
+%LET _SASPROGRAMFILE=;
+%LET _SASPROGRAMFILEHOST=;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
